@@ -2,7 +2,7 @@ import os
 import traceback
 
 import imageio
-from PIL import ImageDraw
+from module.PIL import ImageDraw
 
 from module.base.decorator import cached_property
 from module.base.resource import Resource

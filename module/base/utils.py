@@ -3,7 +3,7 @@ import re
 
 import cv2
 import numpy as np
-from PIL import Image
+from module.PIL import Image
 
 REGEX_NODE = re.compile(r'(-?[A-Za-z]+)(-?\d+)')
 
