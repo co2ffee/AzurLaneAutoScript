@@ -426,73 +426,47 @@ class ConfigGenerator:
                                   v
                    args.json -----+-----> args.json
         """
-        def is_multi_event(event1, event2):
-            if event1 is None or event2 is None or event1 == event2:
-                return False
-            year1, week1, _ = datetime.strptime(event1.date, '%Y%m%d').isocalendar()
-            year2, week2, _ = datetime.strptime(event2.date, '%Y%m%d').isocalendar()
-            return year1 == year2 and week1 == week2
-
-        for server in ARCHIVES_PREFIX.keys():
-            latest_event = None
-            for event in self.event:
+        for event in self.event:
+            for server in ARCHIVES_PREFIX.keys():
                 name = event.__getattribute__(server)
 
-                def insert(key, server_event=True):
-                    opts = deep_get(self.args, keys=f'{key}.Campaign.Event.option')
+                def insert(key):
+                    opts = deep_get(self.args, keys=f'{key}.Campaign.Event.option_{server}', default=[])
                     if event not in opts:
                         opts.append(event)
-                    if name and server_event:
-                        deep_default(self.args, keys=f'{key}.Campaign.Event.{server}', value=[event])
-
-                def get_server_multi_event(key):
-                    server_opts = deep_get(self.args, keys=f'{key}.Campaign.Event.{server}')
-                    if server_opts is None:
-                        server_opts = []
-                    elif not isinstance(server_opts, list):
-                        server_opts = [server_opts]
-                    if event not in server_opts:
-                        server_opts.append(event)
-                    deep_set(self.args, keys=f'{task}.Campaign.Event.{server}', value=server_opts)
+                    deep_set(self.args, keys=f'{key}.Campaign.Event.option_{server}', value=opts)
 
                 if name:
                     if event.is_raid:
-                        for task in RAIDS:
-                            insert(task)
+                        if not hasattr(self, f'_{server}_latest_raid_date'):
+                            setattr(self, f'_{server}_latest_raid_date', int(event.date))
+                        if int(event.date) == getattr(self, f'_{server}_latest_raid_date'):
+                            for task in RAIDS:
+                                insert(task)
                     elif event.is_war_archives:
                         for task in WAR_ARCHIVES:
-                            insert(task, server_event=False)
-                            get_server_multi_event(task)
-                    elif event.is_coalition:
-                        for task in COALITIONS:
                             insert(task)
+                    elif event.is_coalition:
+                        if not hasattr(self, f'_{server}_latest_coalition_date'):
+                            setattr(self, f'_{server}_latest_coalition_date', int(event.date))
+                        if int(event.date) == getattr(self, f'_{server}_latest_coalition_date'):
+                            for task in COALITIONS:
+                                insert(task)
                     else:
-                        if latest_event is None:
-                            latest_event = event
+                        if not hasattr(self, f'_{server}_latest_event_date'):
+                            setattr(self, f'_{server}_latest_event_date', int(event.date))
+                        if int(event.date) == getattr(self, f'_{server}_latest_event_date'):
                             for task in EVENTS + GEMS_FARMINGS:
                                 insert(task)
-                        for task in EVENTS + GEMS_FARMINGS:
-                            if is_multi_event(event, latest_event):
-                                insert(task, server_event=False)
-                                get_server_multi_event(task)
 
         for task in EVENTS + GEMS_FARMINGS + WAR_ARCHIVES + RAIDS + COALITIONS:
-            options = deep_get(self.args, keys=f'{task}.Campaign.Event.option')
-            # Remove campaign_main from event list
-            options = [option for option in options if option != 'campaign_main']
-            # Sort options
-            options = sorted(options)
-            deep_set(self.args, keys=f'{task}.Campaign.Event.option', value=options)
-            # Sort latest
             latest = {}
             for server in ARCHIVES_PREFIX.keys():
-                latest[server] = deep_pop(self.args, keys=f'{task}.Campaign.Event.{server}', default='')
-            latest_values = [v[-1] if isinstance(v, list) and len(v) else v for v in latest.values()]
-            bold = sorted(set(latest_values))
-            deep_set(self.args, keys=f'{task}.Campaign.Event.option_bold', value=bold)
-            for server, event in latest.items():
-                deep_set(self.args, keys=f'{task}.Campaign.Event.{server}', value=event)
-
+                latest[server] = deep_get(self.args, keys=f'{task}.Campaign.Event.option_{server}', default=[])
+            options = set().union(*latest.values())
+            options = sorted([option for option in options if option != 'campaign_main'])
+            deep_set(self.args, keys=f'{task}.Campaign.Event.option', value=options)
+        
     @staticmethod
     def generate_deploy_template():
         template = poor_yaml_read(DEPLOY_TEMPLATE)
@@ -666,39 +640,23 @@ class ConfigUpdater:
         server = to_server(deep_get(new, 'Alas.Emulator.PackageName', 'cn'))
         if not is_template:
             for task in EVENTS + RAIDS + COALITIONS:
-                # Get current event from user's config
-                current_event = deep_get(new, keys=f'{task}.Campaign.Event')
-                # Get all available events for current server
-                available_event = deep_get(self.args, f'{task}.Campaign.Event.{server}')
-                # Get latest event
-                latest_event = available_event[-1] if len(available_event) else current_event
-
-                if current_event not in available_event:
+                opts = deep_get(self.args, keys=f'{task}.Campaign.Event.option_{server}', default=[])    
+                if not deep_get(new, keys=f'{task}.Campaign.Event', default='campaign_main') in opts:
                     deep_set(new,
                              keys=f'{task}.Campaign.Event',
-                             value=latest_event)
-
-            for task in GEMS_FARMINGS:
-                current_event = deep_get(new, keys=f'{task}.Campaign.Event', default='campaign_main')
-                if current_event != 'campaign_main':
-                    available_event = deep_get(self.args, f'{task}.Campaign.Event.{server}')
-                    latest_event = available_event[-1] if len(available_event) else current_event
-
-                    if current_event not in available_event:
-                        deep_set(new,
-                                 keys=f'{task}.Campaign.Event',
-                                 value=latest_event)
-
+                             value=opts[0])
+                
+            for task in ['GemsFarming']:
+                if deep_get(new, keys=f'{task}.Campaign.Event', default='campaign_main') != 'campaign_main':
+                    deep_set(new,
+                             keys=f'{task}.Campaign.Event',
+                             value=deep_get(self.args, f'{task}.Campaign.Event.option_{server}')[0])
         # War archive does not allow campaign_main
         for task in WAR_ARCHIVES:
-            current_event = deep_get(new, keys=f'{task}.Campaign.Event', default='campaign_main')
-            if current_event == 'campaign_main':
-                available_event = deep_get(self.args, f'{task}.Campaign.Event.{server}')
-                latest_event = available_event[0] if len(available_event) else current_event
-                if current_event not in available_event:
-                    deep_set(new,
-                             keys=f'{task}.Campaign.Event',
-                             value=latest_event)
+            if deep_get(new, keys=f'{task}.Campaign.Event', default='campaign_main') == 'campaign_main':
+                deep_set(new,
+                         keys=f'{task}.Campaign.Event',
+                         value=deep_get(self.args, f'{task}.Campaign.Event.option_{server}')[0])
 
         # Events does not allow default stage 12-4
         def default_stage(t, stage):
